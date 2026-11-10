@@ -439,6 +439,22 @@ class Grid
     }
 
     /**
+     * Use an estimated row count instead of COUNT(*) for the pagination total.
+     *
+     * @see \Encore\Admin\Grid\Model::useApproximateTotal()
+     *
+     * @param bool $use
+     *
+     * @return $this
+     */
+    public function useApproximateTotal(bool $use = true)
+    {
+        $this->model()->useApproximateTotal($use);
+
+        return $this;
+    }
+
+    /**
      * Disable grid pagination.
      *
      * @return $this

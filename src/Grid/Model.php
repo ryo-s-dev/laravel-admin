@@ -63,6 +63,13 @@ class Model
     protected $usePaginate = true;
 
     /**
+     * Use an estimated row count instead of COUNT(*) for the paginator total.
+     *
+     * @var bool
+     */
+    protected $useApproximateTotal = false;
+
+    /**
      * The query string variable used to store the per-page.
      *
      * @var string
@@ -136,6 +143,27 @@ class Model
     public function usePaginate($use = true)
     {
         $this->usePaginate = $use;
+    }
+
+    /**
+     * Use an estimated row count instead of COUNT(*) for the paginator total.
+     *
+     * On PostgreSQL, the total is read from pg_class.reltuples (the planner
+     * statistic maintained by ANALYZE / autovacuum), which keeps page links
+     * and the total display while avoiding a full COUNT(*) on large tables.
+     * The value is an estimate. When the query has WHERE conditions (filters,
+     * scopes, relation constraints) or the driver is not PostgreSQL, a regular
+     * COUNT(*) is used instead.
+     *
+     * @param bool $use
+     *
+     * @return $this
+     */
+    public function useApproximateTotal($use = true)
+    {
+        $this->useApproximateTotal = $use;
+
+        return $this;
     }
 
     /**
@@ -377,6 +405,11 @@ class Model
         }
 
         $this->setSort();
+
+        if ($this->usePaginate && $this->useApproximateTotal) {
+            return $this->getWithApproximateTotal();
+        }
+
         $this->setPaginate();
 
         $this->queries->unique()->each(function ($query) {
@@ -394,6 +427,74 @@ class Model
         }
 
         throw new \Exception('Grid query error');
+    }
+
+    /**
+     * Same as the paginate branch of get(), but builds the paginator with an
+     * estimated total instead of running COUNT(*).
+     *
+     * @return Collection
+     */
+    protected function getWithApproximateTotal()
+    {
+        $paginate = $this->findQueryByMethod('paginate');
+
+        $this->queries = $this->queries->reject(function ($query) {
+            return $query['method'] == 'paginate';
+        });
+
+        $this->queries->unique()->each(function ($query) {
+            $this->model = call_user_func_array([$this->model, $query['method']], $query['arguments']);
+        });
+
+        $arguments = $this->resolvePerPage($paginate);
+
+        $perPage = isset($arguments[0]) ? $arguments[0] : $this->perPage;
+        $columns = isset($arguments[1]) ? $arguments[1] : ['*'];
+        $pageName = isset($arguments[2]) ? $arguments[2] : 'page';
+
+        $page = LengthAwarePaginator::resolveCurrentPage($pageName);
+
+        $total = $this->approximateTotal();
+
+        $items = $this->model->forPage($page, $perPage)->get($columns);
+
+        $this->model = new LengthAwarePaginator($items, $total, $perPage, $page, [
+            'path'     => LengthAwarePaginator::resolveCurrentPath(),
+            'pageName' => $pageName,
+        ]);
+
+        $this->handleInvalidPage($this->model);
+
+        return $this->model->getCollection();
+    }
+
+    /**
+     * Estimated total rows for the current query.
+     *
+     * @return int
+     */
+    protected function approximateTotal()
+    {
+        $connection = $this->originalModel->getConnection();
+
+        $base = $this->model->toBase();
+
+        // reltuples is the row count of the whole table, so it cannot be used
+        // once the query is narrowed down by WHERE conditions.
+        if (!empty($base->wheres) || $connection->getDriverName() !== 'pgsql') {
+            return (int) $base->getCountForPagination();
+        }
+
+        $row = $connection->selectOne(
+            'select reltuples::bigint as estimate from pg_class where oid = ?::regclass',
+            [$connection->getTablePrefix().$this->originalModel->getTable()]
+        );
+
+        $estimate = $row ? (int) $row->estimate : 0;
+
+        // reltuples is 0 or -1 before the table is first analyzed.
+        return $estimate > 0 ? $estimate : (int) $base->getCountForPagination();
     }
 
     /**
