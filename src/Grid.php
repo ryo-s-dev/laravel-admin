@@ -339,23 +339,32 @@ class Grid
      */
     protected function addRelationColumn($name, $label = '')
     {
-        list($relation, $column) = explode('.', $name);
+        // Resolve every segment except the last one as a relation, so that
+        // "a.b.c" eager loads "a.b" instead of only "a".
+        $segments = explode('.', $name);
+        $column = array_pop($segments);
 
-        $model = $this->model()->eloquent();
+        $related = $this->model()->eloquent();
 
-        if (!method_exists($model, $relation) || !$model->{$relation}() instanceof Relations\Relation) {
-            $class = get_class($model);
+        foreach ($segments as $relation) {
+            if (!method_exists($related, $relation) || !$related->{$relation}() instanceof Relations\Relation) {
+                $class = get_class($related);
 
-            admin_error("Call to undefined relationship [{$relation}] on model [{$class}].");
+                admin_error("Call to undefined relationship [{$relation}] on model [{$class}].");
 
-            return $this;
+                return $this;
+            }
+
+            $related = $related->{$relation}()->getRelated();
         }
 
-        $name = ($this->shouldSnakeAttributes() ? Str::snake($relation) : $relation).'.'.$column;
+        $relationPath = implode('.', array_map(function ($relation) {
+            return $this->shouldSnakeAttributes() ? Str::snake($relation) : $relation;
+        }, $segments));
 
-        $this->model()->with($relation);
+        $this->model()->with(implode('.', $segments));
 
-        return $this->addColumn($name, $label)->setRelation($relation, $column);
+        return $this->addColumn($relationPath.'.'.$column, $label)->setRelation($segments[0], $column);
     }
 
     /**
