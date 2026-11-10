@@ -41,6 +41,53 @@
     Inspired by <a href="https://github.com/sleeping-owl/admin" target="_blank">SleepingOwlAdmin</a> and <a href="https://github.com/zofe/rapyd-laravel" target="_blank">rapyd-laravel</a>.
 </p>
 
+About this fork
+------------
+
+This is a fork of [z-song/laravel-admin](https://github.com/z-song/laravel-admin) with two grid performance changes. They are on the [`grid-performance`](https://github.com/ryo-s-dev/laravel-admin/tree/grid-performance) branch. Everything else is the same as upstream.
+
+### 1. Eager load every level of nested relation columns
+
+Upstream `Grid::addRelationColumn()` only eager loads the first relation of a dot-notation column. With a column such as `a.b.c`, only `a` was passed to `with()`, so reading `a.b` in a `display()` callback ran one extra query per row (N+1).
+
+This fork eager loads the full path (`a.b`). Two-level columns (`a.b`) work the same as before. You don't need to change any code.
+
+### 2. `useApproximateTotal()`: pagination without `COUNT(*)`
+
+`paginate()` runs `COUNT(*)` on every request to show the page links and the total. On large PostgreSQL tables, this gets slower as the table grows.
+
+`useApproximateTotal()` takes the total from the PostgreSQL planner's row estimate (`pg_class.reltuples`) instead. Page links and the total are still shown.
+
+```php
+$grid = new Grid(new Order());
+
+$grid->useApproximateTotal();
+```
+
+It is off unless you call it. The total is an estimate, so it can differ a little from the real row count. The grid falls back to a normal `COUNT(*)` when:
+
+- the query has WHERE conditions (grid filters, global scopes such as soft deletes, or relation constraints), because the estimate counts every row in the table
+- the database is not PostgreSQL
+- the table has not been analyzed yet, so the estimate is 0 or less
+
+### Installing this fork
+
+Add the repository to your `composer.json` and require the branch. The package name stays `encore/laravel-admin`.
+
+```json
+{
+    "repositories": [
+        {
+            "type": "vcs",
+            "url": "https://github.com/ryo-s-dev/laravel-admin"
+        }
+    ],
+    "require": {
+        "encore/laravel-admin": "dev-grid-performance"
+    }
+}
+```
+
 Sponsor
 ------------
 
